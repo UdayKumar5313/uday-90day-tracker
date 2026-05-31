@@ -1,0 +1,36 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model TrackerState {
+  id              String   @id @default("main")
+  completedTasks  String   @default("[]")
+  consumedDiet    String   @default("[]")
+  completedSets   String   @default("[]")
+  energyLevel     Int      @default(0)
+  sleepBed        String   @default("22:30")
+  sleepWake       String   @default("06:30")
+  steps           Int      @default(0)
+  weight          Float    @default(56.2)
+  currentWeek     Int      @default(1)
+  strictMode      Boolean  @default(true)
+  history         String   @default("{}")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model PhotoCheckin {
+  id        String   @id @default(cuid())
+  date      String   @unique
+  timestamp Int
+  front     String?
+  side      String?
+  waist     Float?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
