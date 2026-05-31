@@ -3,19 +3,11 @@ import ZAI from 'z-ai-web-dev-sdk';
 
 // Cache the ZAI instance
 let zaiInstance: ZAI | null = null;
-let zaiInitError: string | null = null;
 
 async function getZAI(): Promise<ZAI> {
   if (zaiInstance) return zaiInstance;
-  try {
-    zaiInstance = await ZAI.create();
-    return zaiInstance;
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : 'Unknown error';
-    zaiInitError = msg;
-    console.error('ZAI SDK init error:', msg);
-    throw error;
-  }
+  zaiInstance = await ZAI.create();
+  return zaiInstance;
 }
 
 export async function POST(request: NextRequest) {
@@ -29,19 +21,21 @@ export async function POST(request: NextRequest) {
     let zai: ZAI;
     try {
       zai = await getZAI();
-    } catch {
+    } catch (initError) {
+      console.error('ZAI SDK init error:', initError);
       return NextResponse.json({
-        response: "The AI assistant is not configured on this server. This feature works when running locally or with proper SDK configuration. Your tracker still works perfectly — check off items manually! 💪",
+        response: "The AI assistant is temporarily unavailable. Your tracker still works perfectly — check off items manually! 💪",
         error: 'SDK not configured',
       });
     }
 
     // Build messages array for the LLM
-    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [];
+    // IMPORTANT: z-ai-web-dev-sdk uses 'assistant' role for system prompts (NOT 'system')
+    const messages: Array<{ role: 'assistant' | 'user'; content: string }> = [];
 
-    // Add system prompt as 'system' role message
+    // Add system prompt as 'assistant' role message (SDK requirement)
     if (systemPrompt) {
-      messages.push({ role: 'system', content: systemPrompt });
+      messages.push({ role: 'assistant', content: systemPrompt });
     }
 
     // Add conversation history (skip initial welcome message)
@@ -57,14 +51,39 @@ export async function POST(request: NextRequest) {
     // Add current user message
     messages.push({ role: 'user', content: message });
 
-    const completion = await zai.chat.completions.create({
-      messages,
-      thinking: { type: 'disabled' },
+    // Retry logic with exponential backoff
+    let lastError: Error | null = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const completion = await zai.chat.completions.create({
+          messages,
+          thinking: { type: 'disabled' },
+        });
+
+        const response = completion.choices?.[0]?.message?.content;
+
+        if (!response || response.trim().length === 0) {
+          throw new Error('Empty response from AI');
+        }
+
+        return NextResponse.json({ response });
+      } catch (attemptError) {
+        lastError = attemptError instanceof Error ? attemptError : new Error(String(attemptError));
+        console.error(`Chat attempt ${attempt} failed:`, lastError.message);
+
+        if (attempt < 3) {
+          // Wait before retry (exponential backoff)
+          await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+        }
+      }
+    }
+
+    // All retries failed
+    console.error('All chat attempts failed. Last error:', lastError?.message);
+    return NextResponse.json({
+      response: "Sorry Uday, I'm having trouble connecting right now. Please try again in a moment.",
+      error: 'Chat failed after retries',
     });
-
-    const response = completion.choices?.[0]?.message?.content || 'Sorry, I could not generate a response.';
-
-    return NextResponse.json({ response });
   } catch (error) {
     console.error('Chat API error:', error);
     return NextResponse.json({
