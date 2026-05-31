@@ -1,25 +1,43 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+
+// Default state when database is not available
+const DEFAULT_STATE = {
+  completedTasks: [],
+  consumedDiet: [],
+  completedSets: [],
+  energyLevel: 0,
+  sleepBed: '22:30',
+  sleepWake: '06:30',
+  steps: 0,
+  weight: 56.2,
+  currentWeek: 1,
+  strictMode: true,
+  history: {},
+};
+
+// Check if database is available (SQLite won't work on Vercel's read-only filesystem)
+async function getDb() {
+  try {
+    const { db } = await import('@/lib/db');
+    return db;
+  } catch {
+    return null;
+  }
+}
 
 export async function GET() {
   try {
+    const db = await getDb();
+    if (!db) {
+      // No database available - return defaults (app uses localStorage)
+      return NextResponse.json(DEFAULT_STATE);
+    }
+
     const state = await db.trackerState.findUnique({ where: { id: 'main' } });
     if (!state) {
-      return NextResponse.json({
-        completedTasks: [],
-        consumedDiet: [],
-        completedSets: [],
-        energyLevel: 0,
-        sleepBed: '22:30',
-        sleepWake: '06:30',
-        steps: 0,
-        weight: 56.2,
-        currentWeek: 1,
-        strictMode: true,
-        history: {},
-      });
+      return NextResponse.json(DEFAULT_STATE);
     }
-    
+
     return NextResponse.json({
       completedTasks: JSON.parse(state.completedTasks),
       consumedDiet: JSON.parse(state.consumedDiet),
@@ -35,14 +53,22 @@ export async function GET() {
     });
   } catch (error) {
     console.error('Failed to load state:', error);
-    return NextResponse.json({ error: 'Failed to load state' }, { status: 500 });
+    // Gracefully return defaults so the app still works
+    return NextResponse.json(DEFAULT_STATE);
   }
 }
 
 export async function PUT(request: NextRequest) {
   try {
     const data = await request.json();
-    
+    const db = await getDb();
+
+    if (!db) {
+      // No database available - acknowledge but don't persist server-side
+      // The app uses localStorage as primary storage anyway
+      return NextResponse.json({ success: true, storage: 'client-only' });
+    }
+
     await db.trackerState.upsert({
       where: { id: 'main' },
       update: {
@@ -73,10 +99,11 @@ export async function PUT(request: NextRequest) {
         history: JSON.stringify(data.history || {}),
       },
     });
-    
-    return NextResponse.json({ success: true });
+
+    return NextResponse.json({ success: true, storage: 'database' });
   } catch (error) {
     console.error('Failed to save state:', error);
-    return NextResponse.json({ error: 'Failed to save state' }, { status: 500 });
+    // Don't fail the client - localStorage is the primary storage
+    return NextResponse.json({ success: true, storage: 'client-only-fallback' });
   }
 }
